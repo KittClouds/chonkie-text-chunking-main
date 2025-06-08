@@ -1,4 +1,5 @@
 
+
 import { HNSW } from './main';
 
 interface GraphSnapshot {
@@ -83,25 +84,31 @@ export class HNSWPersistence {
       const snapshots: GraphSnapshot[] = [];
       let totalSize = 0;
       
-      // Use keys() iterator which is more widely supported
-      for await (const name of dir.keys()) {
-        if (name.endsWith('.json')) {
-          try {
-            const handle = await dir.getFileHandle(name);
-            const file = await handle.getFile();
-            const size = file.size;
-            totalSize += size;
-            
-            snapshots.push({
-              fileName: name.replace('.json', ''),
-              checksum: '',
-              createdAt: new Date(file.lastModified),
-              size
-            });
-          } catch (error) {
-            console.warn(`Failed to get info for file: ${name}`, error);
+      // Use a more compatible approach with async iteration
+      try {
+        // Try to use values() method which is more widely supported
+        for await (const handle of (dir as any).values()) {
+          if (handle.kind === 'file' && handle.name.endsWith('.json')) {
+            try {
+              const file = await handle.getFile();
+              const size = file.size;
+              totalSize += size;
+              
+              snapshots.push({
+                fileName: handle.name.replace('.json', ''),
+                checksum: '',
+                createdAt: new Date(file.lastModified),
+                size
+              });
+            } catch (error) {
+              console.warn(`Failed to get info for file: ${handle.name}`, error);
+            }
           }
         }
+      } catch (iterationError) {
+        // Fallback: if iteration fails, return empty results
+        console.warn('Failed to iterate directory:', iterationError);
+        return { count: 0, totalSize: 0, snapshots: [] };
       }
       
       return {
@@ -162,3 +169,4 @@ export class HNSWPersistence {
 }
 
 export const hnswPersistence = new HNSWPersistence();
+
