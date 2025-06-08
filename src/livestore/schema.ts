@@ -493,7 +493,7 @@ export const events = {
   uiStateSet: tables.uiState.set
 };
 
-// Enhanced materializers with new events - FIXED to remove log-only materializers
+// Enhanced materializers with new events - FIXED to handle log-only events properly
 const materializers = State.SQLite.materializers(events, {
   // Cluster materializers
   'v1.ClusterCreated': ({ id, title, createdAt, updatedAt }) =>
@@ -581,7 +581,28 @@ const materializers = State.SQLite.materializers(events, {
     tables.graphLayouts.delete().where({ id }),
 
   'v1.GraphViewportChanged': ({ layoutId, viewport, updatedAt }) =>
-    tables.graphLayouts.update({ viewport, updatedAt }).where({ id: layoutId })
+    tables.graphLayouts.update({ viewport, updatedAt }).where({ id: layoutId }),
+
+  // Log-only events that don't modify database state but need materializers
+  'v1.EmbeddingIndexCleared': () => {
+    // No database operations needed for this log-only event
+    return undefined as any; // Explicitly return undefined for log-only events
+  },
+
+  'v1.EmbeddingIndexRebuilt': () => {
+    // No database operations needed for this log-only event
+    return undefined as any; // Explicitly return undefined for log-only events
+  },
+
+  'v1.HnswGraphSnapshotCreated': () => {
+    // No database operations needed for this log-only event
+    return undefined as any; // Explicitly return undefined for log-only events
+  },
+
+  'v1.GraphLayoutLoaded': () => {
+    // No database operations needed for this log-only event
+    return undefined as any; // Explicitly return undefined for log-only events
+  }
 });
 
 // Create the state with tables and materializers
