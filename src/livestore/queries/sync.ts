@@ -63,17 +63,20 @@ export const embeddingSyncStats$ = computed((get) => {
 export const recentlyUpdatedNotes$ = computed((get) => {
   const cutoffTime = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString(); // 24 hours ago
   
-  const recentNotes = get(queryDb(
-    tables.notes.where(note => note.updatedAt > cutoffTime).orderBy('updatedAt', 'desc'),
+  const allNotes = get(queryDb(
+    tables.notes.orderBy('updatedAt', 'desc'),
     { label: 'recentNotesForSync$' }
   ));
 
   const staleNotes = get(notesRequiringEmbedding$);
   const staleNoteIds = new Set(staleNotes.map(n => n.id));
 
-  if (!Array.isArray(recentNotes)) {
+  if (!Array.isArray(allNotes)) {
     return [];
   }
+
+  // Filter notes by date in JavaScript after retrieval
+  const recentNotes = allNotes.filter(note => note.updatedAt > cutoffTime);
 
   return recentNotes.filter(note => staleNoteIds.has(note.id));
 }, { label: 'recentlyUpdatedNotes$' });
