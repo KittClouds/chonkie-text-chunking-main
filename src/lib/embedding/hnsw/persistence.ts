@@ -1,3 +1,4 @@
+
 import { HNSW } from './main';
 
 interface GraphSnapshot {
@@ -82,10 +83,11 @@ export class HNSWPersistence {
       const snapshots: GraphSnapshot[] = [];
       let totalSize = 0;
       
-      // Use for await...of to iterate over directory entries
-      for await (const [name, handle] of dir.entries()) {
-        if (handle.kind === 'file' && name.endsWith('.json')) {
+      // Use keys() iterator which is more widely supported
+      for await (const name of dir.keys()) {
+        if (name.endsWith('.json')) {
           try {
+            const handle = await dir.getFileHandle(name);
             const file = await handle.getFile();
             const size = file.size;
             totalSize += size;
