@@ -8,6 +8,7 @@ import App from './App';
 import LiveStoreWorker from './livestore/livestore.worker?worker';
 import { schema } from './livestore/schema';
 import { embeddingService } from './lib/embedding/EmbeddingService';
+import { hnswSyncOrchestrator } from './services/HnswSyncOrchestrator';
 
 const storeId = 'galaxy-notes-store';
 
@@ -44,6 +45,11 @@ export const Root: React.FC = () => {
       )}
       batchUpdates={batchUpdates}
       storeId={storeId}
+      onStoreReady={(store) => {
+        // Initialize the HNSW sync orchestrator when store is ready
+        console.log('[Root] Initializing HNSW Sync Orchestrator...');
+        hnswSyncOrchestrator.initialize(store);
+      }}
     >
       <App />
     </LiveStoreProvider>
