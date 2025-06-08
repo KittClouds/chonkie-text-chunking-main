@@ -1,3 +1,4 @@
+
 import {
   Events,
   makeSchema,
@@ -82,7 +83,7 @@ export const tables = {
     }
   }),
 
-  // NEW: Embeddings table for semantic search
+  // ENHANCED: Embeddings table with better sync tracking
   embeddings: State.SQLite.table({
     name: 'embeddings',
     columns: {
@@ -91,8 +92,9 @@ export const tables = {
       content: State.SQLite.text(),
       vecDim: State.SQLite.integer({ default: 384 }),
       vecData: State.SQLite.blob(), // Binary embedding data
+      embeddingModel: State.SQLite.text({ default: 'Snowflake/snowflake-arctic-embed-s' }), // Track model version
       createdAt: State.SQLite.text(),
-      updatedAt: State.SQLite.text()
+      updatedAt: State.SQLite.text() // Crucial for sync logic
     }
   }),
 
@@ -234,7 +236,7 @@ export const events = {
     })
   }),
 
-  // Enhanced embedding events
+  // ENHANCED: Enhanced embedding events with model tracking
   noteEmbedded: Events.synced({
     name: 'v1.NoteEmbedded',
     schema: Schema.Struct({
@@ -243,6 +245,7 @@ export const events = {
       content: Schema.String,
       vecData: Schema.Uint8ArrayFromSelf,
       vecDim: Schema.Number,
+      embeddingModel: Schema.String,
       createdAt: Schema.String,
       updatedAt: Schema.String
     })
@@ -273,12 +276,15 @@ export const events = {
     })
   }),
 
+  // ENHANCED: HNSW Graph persistence events with more tracking
   hnswGraphSnapshotCreated: Events.synced({
     name: 'v1.HnswGraphSnapshotCreated',
     schema: Schema.Struct({
       fileName: Schema.String,
       checksum: Schema.String,
       size: Schema.Number,
+      nodeCount: Schema.Number,
+      embeddingModel: Schema.String,
       createdAt: Schema.String
     })
   }),
@@ -510,10 +516,10 @@ const materializers = State.SQLite.materializers(events, {
   'v1.NoteDeleted': ({ id }) =>
     tables.notes.delete().where({ id }),
 
-  // FIXED: Embedding materializers - use INSERT OR REPLACE for SQLite upsert
-  'v1.NoteEmbedded': ({ noteId, title, content, vecData, vecDim, createdAt, updatedAt }) => [
+  // ENHANCED: Embedding materializers with model tracking
+  'v1.NoteEmbedded': ({ noteId, title, content, vecData, vecDim, embeddingModel, createdAt, updatedAt }) => [
     tables.embeddings.delete().where({ noteId }),
-    tables.embeddings.insert({ noteId, title, content, vecData, vecDim, createdAt, updatedAt })
+    tables.embeddings.insert({ noteId, title, content, vecData, vecDim, embeddingModel, createdAt, updatedAt })
   ],
 
   'v1.EmbeddingRemoved': ({ noteId }) =>
@@ -577,7 +583,7 @@ const materializers = State.SQLite.materializers(events, {
 
   'v1.EmbeddingIndexRebuilt': ({ indexId, nodeCount, rebuiltAt }) => undefined, // Log-only event
 
-  'v1.HnswGraphSnapshotCreated': ({ fileName, checksum, size, createdAt }) => undefined, // Log-only event
+  'v1.HnswGraphSnapshotCreated': ({ fileName, checksum, size, nodeCount, embeddingModel, createdAt }) => undefined, // Log-only event
 
   // Fixed: Return undefined instead of void for read-only operations
   'v1.GraphLayoutLoaded': ({ id }) => undefined,

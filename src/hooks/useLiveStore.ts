@@ -1,3 +1,4 @@
+
 import { useStore } from '@livestore/react';
 import { 
   activeNoteId$, 
@@ -22,7 +23,13 @@ import {
   entityReferenceCounts$,
   recentEntities$,
   orphanedEntities$,
-  allEntitiesArray$
+  allEntitiesArray$,
+  // NEW: Sync tracking queries
+  notesRequiringEmbedding$,
+  embeddingSyncStats$,
+  recentlyUpdatedNotes$,
+  orphanedEmbeddings$,
+  embeddingModelConsistency$
 } from '../livestore/queries';
 // Import new cross-note relation queries
 import { 
@@ -198,6 +205,35 @@ export function useTopCoOccurrences() {
 export function useTopGlobalTriples() {
   const { store } = useStore();
   return store.useQuery(topGlobalTriples$);
+}
+
+// NEW: Sync tracking hooks
+export function useNotesRequiringEmbedding() {
+  const { store } = useStore();
+  const notes = store.useQuery(notesRequiringEmbedding$);
+  return Array.isArray(notes) ? notes : [];
+}
+
+export function useEmbeddingSyncStats() {
+  const { store } = useStore();
+  return store.useQuery(embeddingSyncStats$);
+}
+
+export function useRecentlyUpdatedNotes() {
+  const { store } = useStore();
+  const notes = store.useQuery(recentlyUpdatedNotes$);
+  return Array.isArray(notes) ? notes : [];
+}
+
+export function useOrphanedEmbeddings() {
+  const { store } = useStore();
+  const embeddings = store.useQuery(orphanedEmbeddings$);
+  return Array.isArray(embeddings) ? embeddings : [];
+}
+
+export function useEmbeddingModelConsistency() {
+  const { store } = useStore();
+  return store.useQuery(embeddingModelConsistency$);
 }
 
 // Enhanced helper to commit note updates with embedding integration

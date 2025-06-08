@@ -9,6 +9,9 @@ import { backlinkService } from '@/services/BacklinkService';
 // Re-export entity queries
 export * from './queries/entities';
 
+// NEW: Re-export sync tracking queries
+export * from './queries/sync';
+
 // Basic entity queries with proper typing
 export const clusters$ = queryDb(
   tables.clusters.orderBy('createdAt', 'desc'),

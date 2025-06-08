@@ -1,3 +1,4 @@
+
 import { embeddingService } from './EmbeddingService';
 import { Block } from '@blocknote/core';
 import { vecToBlob, blobToVec } from './binaryUtils';
@@ -191,7 +192,7 @@ class SemanticSearchService {
             
             // Persist the graph for future use
             try {
-              await hnswPersistence.persistGraph(this.hnswIndex);
+              await this.persistHnswIndex();
             } catch (error) {
               console.warn('Failed to persist HNSW graph:', error);
             }
@@ -202,6 +203,44 @@ class SemanticSearchService {
       console.log(`SemanticSearchService: Loaded ${this.embeddings.size} embeddings into memory`);
     } catch (error) {
       console.error('Failed to load embeddings from LiveStore:', error);
+    }
+  }
+
+  // ENHANCED: Explicit HNSW persistence with event tracking
+  async persistHnswIndex() {
+    if (!this.storeRef) {
+      throw new Error('Store reference not set');
+    }
+
+    try {
+      const now = new Date().toISOString();
+      const fileName = `hnsw-index-${now.replace(/[:.]/g, '-')}`;
+      
+      // Persist the graph using the persistence service
+      await hnswPersistence.persistGraph(this.hnswIndex, fileName);
+      
+      // Get persistence metadata
+      const snapshotInfo = await hnswPersistence.getSnapshotInfo();
+      const latestSnapshot = snapshotInfo.snapshots[0]; // Most recent
+      
+      if (latestSnapshot) {
+        // Commit the successful persistence as an event
+        this.storeRef.commit(events.hnswGraphSnapshotCreated({
+          fileName: latestSnapshot.fileName,
+          checksum: latestSnapshot.checksum,
+          size: latestSnapshot.size,
+          nodeCount: this.embeddings.size,
+          embeddingModel: 'Snowflake/snowflake-arctic-embed-s',
+          createdAt: now
+        }));
+        
+        console.log(`HNSW graph persisted and tracked: ${fileName}`);
+      }
+      
+      return { fileName, success: true };
+    } catch (error) {
+      console.error('Failed to persist HNSW index:', error);
+      throw error;
     }
   }
 
@@ -244,16 +283,18 @@ class SemanticSearchService {
         embedding: normalizedVector
       });
 
-      // Persist to LiveStore (will also sync across devices)
+      // Persist to LiveStore with enhanced tracking
       if (this.storeRef) {
+        const now = new Date().toISOString();
         this.storeRef.commit(events.noteEmbedded({
           noteId,
           title,
           content: textContent,
           vecData: vecToBlob(normalizedVector),
           vecDim: normalizedVector.length,
-          createdAt: new Date().toISOString(),
-          updatedAt: new Date().toISOString()
+          embeddingModel: 'Snowflake/snowflake-arctic-embed-s',
+          createdAt: now,
+          updatedAt: now
         }));
       } else {
         console.warn('SemanticSearchService: Cannot commit embedding - no store reference');
@@ -355,8 +396,8 @@ class SemanticSearchService {
         }
         
         if (vectorValidationPassed && this.embeddings.size > 0) {
-          await hnswPersistence.persistGraph(this.hnswIndex);
-          console.log('HNSW index persisted successfully');
+          await this.persistHnswIndex();
+          console.log('HNSW index persisted successfully with event tracking');
         } else {
           console.warn('Cannot persist index - vector validation failed or no embeddings');
         }
