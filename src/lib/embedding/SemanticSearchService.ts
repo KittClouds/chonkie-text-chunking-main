@@ -366,7 +366,7 @@ class SemanticSearchService {
       const textContent = blocksToText(content);
       if (!textContent.trim()) {
         // Remove from both memory, HNSW index, and LiveStore
-        this.removeNoteFromIndex(noteId);
+        this.removePointFromIndex(noteId);
         if (this.storeRef) {
           this.storeRef.commit(events.embeddingRemoved({ noteId }));
         }
@@ -379,7 +379,7 @@ class SemanticSearchService {
       const normalizedVector = l2Normalize(vector);
       
       // Remove old entry if it exists
-      this.removeNoteFromIndex(noteId);
+      this.removePointFromIndex(noteId);
       
       // Add to HNSW index
       const hnswId = this.nextHnswId++;
@@ -422,7 +422,7 @@ class SemanticSearchService {
   removeNote(noteId: string) {
     try {
       // Remove from both memory and LiveStore
-      this.removeNoteFromIndex(noteId);
+      this.removePointFromIndex(noteId);
       if (this.storeRef) {
         this.storeRef.commit(events.embeddingRemoved({ noteId }));
       } else {
