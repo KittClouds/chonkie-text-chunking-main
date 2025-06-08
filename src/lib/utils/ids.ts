@@ -27,3 +27,12 @@ export const generateEntityId = (kind: string, label: string): EntityId => {
 // Legacy support - these should eventually be migrated to use generateEntityId
 export const generateTagId = (tag: string): string => generateEntityId('CONCEPT', tag);
 export const generateMentionId = (mention: string): string => generateEntityId('MENTION', mention);
+
+// --- NEW IDs for Chunk-Centric Architecture ---
+export type ChunkId = string;
+
+/**
+ * Generates a unique ID for a text or data chunk.
+ * e.g., chunk_aB_1xYz
+ */
+export const generateChunkId = (): ChunkId => `chunk_${nanoid()}`;
