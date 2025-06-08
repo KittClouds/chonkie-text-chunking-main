@@ -493,7 +493,7 @@ export const events = {
   uiStateSet: tables.uiState.set
 };
 
-// Enhanced materializers with new events - FIXED to not return undefined
+// Enhanced materializers with new events - FIXED to remove log-only materializers
 const materializers = State.SQLite.materializers(events, {
   // Cluster materializers
   'v1.ClusterCreated': ({ id, title, createdAt, updatedAt }) =>
@@ -581,28 +581,7 @@ const materializers = State.SQLite.materializers(events, {
     tables.graphLayouts.delete().where({ id }),
 
   'v1.GraphViewportChanged': ({ layoutId, viewport, updatedAt }) =>
-    tables.graphLayouts.update({ viewport, updatedAt }).where({ id: layoutId }),
-
-  // FIXED: Enhanced embedding event handlers - properly return void instead of undefined
-  'v1.EmbeddingIndexCleared': ({ clearedAt, reason }) => {
-    // Log-only event - no database operations needed
-    console.log(`Embedding index cleared at ${clearedAt}: ${reason}`);
-  },
-
-  'v1.EmbeddingIndexRebuilt': ({ indexId, nodeCount, rebuiltAt }) => {
-    // Log-only event - no database operations needed
-    console.log(`Embedding index rebuilt: ${indexId} with ${nodeCount} nodes at ${rebuiltAt}`);
-  },
-
-  'v1.HnswGraphSnapshotCreated': ({ fileName, checksum, size, nodeCount, embeddingModel, createdAt }) => {
-    // Log-only event - no database operations needed
-    console.log(`HNSW graph snapshot created: ${fileName} (${size} bytes, ${nodeCount} nodes) at ${createdAt}`);
-  },
-
-  'v1.GraphLayoutLoaded': ({ id, loadedAt }) => {
-    // Log-only event - no database operations needed
-    console.log(`Graph layout loaded: ${id} at ${loadedAt}`);
-  }
+    tables.graphLayouts.update({ viewport, updatedAt }).where({ id: layoutId })
 });
 
 // Create the state with tables and materializers
