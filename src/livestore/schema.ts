@@ -584,25 +584,13 @@ const materializers = State.SQLite.materializers(events, {
     tables.graphLayouts.update({ viewport, updatedAt }).where({ id: layoutId }),
 
   // Log-only events that don't modify database state but need materializers
-  'v1.EmbeddingIndexCleared': () => {
-    // No database operations needed for this log-only event
-    return undefined as any; // Explicitly return undefined for log-only events
-  },
+  'v1.EmbeddingIndexCleared': () => [],
 
-  'v1.EmbeddingIndexRebuilt': () => {
-    // No database operations needed for this log-only event
-    return undefined as any; // Explicitly return undefined for log-only events
-  },
+  'v1.EmbeddingIndexRebuilt': () => [],
 
-  'v1.HnswGraphSnapshotCreated': () => {
-    // No database operations needed for this log-only event
-    return undefined as any; // Explicitly return undefined for log-only events
-  },
+  'v1.HnswGraphSnapshotCreated': () => [],
 
-  'v1.GraphLayoutLoaded': () => {
-    // No database operations needed for this log-only event
-    return undefined as any; // Explicitly return undefined for log-only events
-  }
+  'v1.GraphLayoutLoaded': () => []
 });
 
 // Create the state with tables and materializers
