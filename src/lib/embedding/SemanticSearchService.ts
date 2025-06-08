@@ -110,73 +110,6 @@ class SemanticSearchService {
     }
   }
 
-  // NEW: Methods for incremental updates
-  public async addPointToIndex(embeddingRow: any) {
-    if (!this.hnswIndex || !this.isReady) return;
-
-    try {
-      const existingHnswId = this.noteIdToHnswId.get(embeddingRow.noteId);
-      if (existingHnswId !== undefined) {
-        // This is an update, which for HNSW is a remove + add.
-        this.removePointFromIndex(embeddingRow.noteId);
-      }
-
-      const embeddingVector = blobToVec(embeddingRow.vecData, embeddingRow.vecDim);
-      const normalizedVector = l2Normalize(embeddingVector);
-      const newHnswId = this.nextHnswId++;
-
-      await this.hnswIndex.addPoint(newHnswId, normalizedVector);
-      
-      this.noteIdToHnswId.set(embeddingRow.noteId, newHnswId);
-      this.hnswIdToNoteId.set(newHnswId, embeddingRow.noteId);
-      this.embeddings.set(embeddingRow.noteId, {
-        noteId: embeddingRow.noteId,
-        title: embeddingRow.title,
-        content: embeddingRow.content,
-        embedding: normalizedVector
-      });
-      console.log(`HNSW: Added point for note ${embeddingRow.noteId}`);
-    } catch (error) {
-      console.error(`Failed to add point to HNSW index for note ${embeddingRow.noteId}`, error);
-    }
-  }
-
-  public removePointFromIndex(noteId: string) {
-    if (!this.hnswIndex) return;
-
-    const hnswId = this.noteIdToHnswId.get(noteId);
-    if (hnswId !== undefined) {
-      // Note: True HNSW removal is complex. A common strategy is to "mark as deleted"
-      // or simply remove from our mapping, so it's no longer discoverable.
-      // For simplicity here, we remove it from our mappings. The graph node remains but won't be found.
-      // A full rebuild during the next snapshot cycle will properly remove it.
-      this.noteIdToHnswId.delete(noteId);
-      this.hnswIdToNoteId.delete(hnswId);
-      this.embeddings.delete(noteId);
-      console.log(`HNSW: Marked point for removal for note ${noteId}`);
-    }
-  }
-
-  // NEW: Getter for HNSW index (needed by orchestrator)
-  public getHnswIndex(): HNSW {
-    return this.hnswIndex;
-  }
-
-  // MODIFIED: Initialization logic to load from snapshot or build from scratch
-  private async loadIndexFromSnapshot(): Promise<boolean> {
-    console.log("SemanticSearchService: Attempting to load HNSW index from snapshot...");
-    const persistedGraph = await hnswPersistence.loadGraph('latest');
-    if (persistedGraph) {
-      this.hnswIndex = persistedGraph;
-      console.log(`SemanticSearchService: Loaded 'latest' HNSW graph.`);
-      // For now, we'll rebuild from LiveStore state rather than trying to restore mappings
-      // This ensures consistency between the snapshot and current LiveStore state
-      return true;
-    }
-    console.log("SemanticSearchService: No snapshot found. Will perform a full build.");
-    return false;
-  }
-
   // Enhanced cleanup with detailed reporting
   async forceCleanupStaleEmbeddings() {
     console.log('SemanticSearchService: Starting force cleanup of stale embeddings');
@@ -194,7 +127,7 @@ class SemanticSearchService {
     }
   }
 
-  // MODIFIED: Load all embeddings from LiveStore into memory for fast search
+  // Load all embeddings from LiveStore into memory for fast search
   private async loadEmbeddingsFromStore() {
     if (!this.storeRef) {
       console.warn('SemanticSearchService: Cannot load embeddings - no store reference');
@@ -202,26 +135,19 @@ class SemanticSearchService {
     }
 
     try {
-      // Try to load from snapshot first
-      const snapshotLoaded = await this.loadIndexFromSnapshot();
-      
       // Query all embeddings from the database
       const embeddingRows = this.storeRef.query(tables.embeddings.select());
       
       console.log(`SemanticSearchService: Loading ${embeddingRows?.length || 0} embeddings from LiveStore`);
       
-      // Reset mappings regardless of whether we loaded a snapshot
+      // Reset embeddings map and HNSW index before loading
       this.embeddings.clear();
+      this.hnswIndex = new HNSW(16, 200, null, 'cosine');
       this.noteIdToHnswId.clear();
       this.hnswIdToNoteId.clear();
       this.nextHnswId = 0;
       
-      // If we didn't load a snapshot, reset the HNSW index too
-      if (!snapshotLoaded) {
-        this.hnswIndex = new HNSW(16, 200, null, 'cosine');
-      }
-      
-      // Convert each row back to in-memory format and build/rebuild HNSW index
+      // Convert each row back to in-memory format and build HNSW index
       if (Array.isArray(embeddingRows)) {
         const hnswData: { id: number; vector: Float32Array }[] = [];
         
@@ -233,7 +159,6 @@ class SemanticSearchService {
             }
             
             const embedding = blobToVec(row.vecData, row.vecDim);
-            const normalizedVector = l2Normalize(embedding);
             const hnswId = this.nextHnswId++;
             
             // Store mapping between noteId and HNSW ID
@@ -244,28 +169,33 @@ class SemanticSearchService {
               noteId: row.noteId,
               title: row.title,
               content: row.content,
-              embedding: normalizedVector
+              embedding
             });
             
-            // Prepare data for HNSW index (only if we didn't load from snapshot)
-            if (!snapshotLoaded) {
-              hnswData.push({ id: hnswId, vector: normalizedVector });
-            }
+            // Prepare data for HNSW index
+            hnswData.push({ id: hnswId, vector: embedding });
           } catch (error) {
             console.error(`Failed to load embedding for note ${row?.noteId}:`, error);
           }
         });
         
-        // Build HNSW index only if we didn't load from snapshot
-        if (!snapshotLoaded && hnswData.length > 0) {
-          await this.hnswIndex.buildIndex(hnswData);
-          console.log(`SemanticSearchService: Built HNSW index with ${hnswData.length} vectors`);
-          
-          // Persist the graph for future use
-          try {
-            await this.persistHnswIndex();
-          } catch (error) {
-            console.warn('Failed to persist HNSW graph:', error);
+        // Try to load persisted graph first
+        const persistedGraph = await hnswPersistence.loadGraph();
+        if (persistedGraph && hnswData.length > 0) {
+          this.hnswIndex = persistedGraph;
+          console.log(`SemanticSearchService: Loaded persisted HNSW graph with ${hnswData.length} vectors`);
+        } else {
+          // Build HNSW index with all data at once for better performance
+          if (hnswData.length > 0) {
+            await this.hnswIndex.buildIndex(hnswData);
+            console.log(`SemanticSearchService: Built HNSW index with ${hnswData.length} vectors`);
+            
+            // Persist the graph for future use
+            try {
+              await this.persistHnswIndex();
+            } catch (error) {
+              console.warn('Failed to persist HNSW graph:', error);
+            }
           }
         }
       }

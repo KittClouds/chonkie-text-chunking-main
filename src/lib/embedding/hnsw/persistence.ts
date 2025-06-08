@@ -1,4 +1,5 @@
 
+
 import { HNSW } from './main';
 
 interface GraphSnapshot {
@@ -72,46 +73,6 @@ export class HNSWPersistence {
     } catch (error) {
       console.warn(`Failed to load HNSW graph: ${fileName}`, error);
       return null;
-    }
-  }
-
-  // NEW: Remove a snapshot file
-  async removeFile(fileName: string): Promise<void> {
-    try {
-      const root = await navigator.storage.getDirectory();
-      const dir = await root.getDirectoryHandle(this.GRAPH_DIR, { create: false });
-      await dir.removeEntry(`${fileName}.json`);
-      console.log(`HNSW: Removed file ${fileName}.json`);
-    } catch (error: any) {
-      if (error.name !== 'NotFoundError') {
-        console.error(`Failed to remove file ${fileName}.json:`, error);
-        throw error;
-      }
-      // If not found, it's a success in our context.
-    }
-  }
-
-  // NEW: Rename a snapshot file
-  async renameFile(oldName: string, newName: string): Promise<void> {
-    try {
-      const root = await navigator.storage.getDirectory();
-      const dir = await root.getDirectoryHandle(this.GRAPH_DIR, { create: false });
-      const fileHandle = await dir.getFileHandle(`${oldName}.json`);
-
-      // OPFS doesn't have a direct 'rename'. We read and write to a new file, then delete the old one.
-      const fileData = await fileHandle.getFile();
-      const newFileHandle = await dir.getFileHandle(`${newName}.json`, { create: true });
-      const writable = await newFileHandle.createWritable();
-      await writable.write(await fileData.arrayBuffer());
-      await writable.close();
-
-      await dir.removeEntry(`${oldName}.json`);
-      console.log(`HNSW: Renamed ${oldName}.json to ${newName}.json`);
-    } catch (error: any) {
-      if (error.name !== 'NotFoundError') {
-        console.error(`Failed to rename ${oldName}.json to ${newName}.json:`, error);
-        throw error;
-      }
     }
   }
 
@@ -208,3 +169,4 @@ export class HNSWPersistence {
 }
 
 export const hnswPersistence = new HNSWPersistence();
+
