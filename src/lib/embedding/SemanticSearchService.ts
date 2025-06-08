@@ -1,3 +1,4 @@
+
 import { embeddingService } from './EmbeddingService';
 import { Block } from '@blocknote/core';
 import { vecToBlob, blobToVec } from './binaryUtils';
@@ -6,11 +7,9 @@ import { toast } from 'sonner';
 import { HNSW } from './hnsw';
 import { hnswPersistence } from './hnsw/persistence';
 import { embeddingCleanupService } from './CleanupService';
-import { generateChunkId } from '../utils/ids';
 
 interface NoteEmbedding {
-  chunkId: string;
-  parentNoteId: string;
+  noteId: string;
   title: string;
   content: string;
   embedding: Float32Array;
@@ -113,10 +112,10 @@ class SemanticSearchService {
     }
 
     try {
-      const existingHnswId = this.noteIdToHnswId.get(embeddingRow.parentNoteId);
+      const existingHnswId = this.noteIdToHnswId.get(embeddingRow.noteId);
       if (existingHnswId !== undefined) {
         // This is an update, remove old point first
-        this.removePointFromIndex(embeddingRow.parentNoteId);
+        this.removePointFromIndex(embeddingRow.noteId);
       }
 
       const embeddingVector = blobToVec(embeddingRow.vecData, embeddingRow.vecDim);
@@ -125,19 +124,18 @@ class SemanticSearchService {
 
       await this.hnswIndex.addPoint(newHnswId, normalizedVector);
       
-      this.noteIdToHnswId.set(embeddingRow.parentNoteId, newHnswId);
-      this.hnswIdToNoteId.set(newHnswId, embeddingRow.parentNoteId);
-      this.embeddings.set(embeddingRow.parentNoteId, {
-        chunkId: embeddingRow.chunkId,
-        parentNoteId: embeddingRow.parentNoteId,
-        title: embeddingRow.title || '',
-        content: embeddingRow.content || '',
+      this.noteIdToHnswId.set(embeddingRow.noteId, newHnswId);
+      this.hnswIdToNoteId.set(newHnswId, embeddingRow.noteId);
+      this.embeddings.set(embeddingRow.noteId, {
+        noteId: embeddingRow.noteId,
+        title: embeddingRow.title,
+        content: embeddingRow.content,
         embedding: normalizedVector
       });
 
-      console.log(`HNSW: Added point for note ${embeddingRow.parentNoteId}`);
+      console.log(`HNSW: Added point for note ${embeddingRow.noteId}`);
     } catch (error) {
-      console.error(`Failed to add point to HNSW index for note ${embeddingRow.parentNoteId}:`, error);
+      console.error(`Failed to add point to HNSW index for note ${embeddingRow.noteId}:`, error);
     }
   }
 
@@ -206,19 +204,18 @@ class SemanticSearchService {
             const embedding = blobToVec(row.vecData, row.vecDim);
             const hnswId = index; // Simple mapping for now
             
-            this.noteIdToHnswId.set(row.parentNoteId, hnswId);
-            this.hnswIdToNoteId.set(hnswId, row.parentNoteId);
-            this.embeddings.set(row.parentNoteId, {
-              chunkId: row.chunkId,
-              parentNoteId: row.parentNoteId,
-              title: row.title || '',
-              content: row.content || '',
+            this.noteIdToHnswId.set(row.noteId, hnswId);
+            this.hnswIdToNoteId.set(hnswId, row.noteId);
+            this.embeddings.set(row.noteId, {
+              noteId: row.noteId,
+              title: row.title,
+              content: row.content,
               embedding
             });
             
             maxHnswId = Math.max(maxHnswId, hnswId);
           } catch (error) {
-            console.error(`Failed to rebuild mapping for note ${row?.parentNoteId}:`, error);
+            console.error(`Failed to rebuild mapping for note ${row?.noteId}:`, error);
           }
         });
         
@@ -293,21 +290,20 @@ class SemanticSearchService {
             const hnswId = this.nextHnswId++;
             
             // Store mapping between noteId and HNSW ID
-            this.noteIdToHnswId.set(row.parentNoteId, hnswId);
-            this.hnswIdToNoteId.set(hnswId, row.parentNoteId);
+            this.noteIdToHnswId.set(row.noteId, hnswId);
+            this.hnswIdToNoteId.set(hnswId, row.noteId);
             
-            this.embeddings.set(row.parentNoteId, {
-              chunkId: row.chunkId,
-              parentNoteId: row.parentNoteId,
-              title: row.title || '',
-              content: row.content || '',
+            this.embeddings.set(row.noteId, {
+              noteId: row.noteId,
+              title: row.title,
+              content: row.content,
               embedding
             });
             
             // Prepare data for HNSW index
             hnswData.push({ id: hnswId, vector: embedding });
           } catch (error) {
-            console.error(`Failed to load embedding for note ${row?.parentNoteId}:`, error);
+            console.error(`Failed to load embedding for note ${row?.noteId}:`, error);
           }
         });
         
@@ -372,15 +368,7 @@ class SemanticSearchService {
         // Remove from both memory, HNSW index, and LiveStore
         this.removePointFromIndex(noteId);
         if (this.storeRef) {
-          // Find the chunk ID for this note and remove it
-          const existingChunks = this.storeRef.query(
-            tables.embeddings.select().where({ parentNoteId: noteId })
-          );
-          if (Array.isArray(existingChunks)) {
-            existingChunks.forEach((chunk: any) => {
-              this.storeRef.commit(events.chunkRemoved({ chunkId: chunk.chunkId }));
-            });
-          }
+          this.storeRef.commit(events.embeddingRemoved({ noteId }));
         }
         return;
       }
@@ -397,31 +385,25 @@ class SemanticSearchService {
       const hnswId = this.nextHnswId++;
       await this.hnswIndex.addPoint(hnswId, normalizedVector);
       
-      // Generate a new chunk ID
-      const chunkId = generateChunkId();
-      
       // Store mapping between noteId and HNSW ID
       this.noteIdToHnswId.set(noteId, hnswId);
       this.hnswIdToNoteId.set(hnswId, noteId);
       
       // Update in-memory cache immediately for fast search
       this.embeddings.set(noteId, {
-        chunkId,
-        parentNoteId: noteId,
+        noteId,
         title,
         content: textContent,
         embedding: normalizedVector
       });
 
-      // Persist to LiveStore with chunk-based event
+      // Persist to LiveStore with enhanced tracking
       if (this.storeRef) {
         const now = new Date().toISOString();
-        this.storeRef.commit(events.chunkEmbedded({
-          chunkId,
-          parentNoteId: noteId,
-          startIndex: 0,
-          endIndex: textContent.length,
-          tokenCount: textContent.split(/\s+/).length,
+        this.storeRef.commit(events.noteEmbedded({
+          noteId,
+          title,
+          content: textContent,
           vecData: vecToBlob(normalizedVector),
           vecDim: normalizedVector.length,
           embeddingModel: 'Snowflake/snowflake-arctic-embed-s',
@@ -442,15 +424,7 @@ class SemanticSearchService {
       // Remove from both memory and LiveStore
       this.removePointFromIndex(noteId);
       if (this.storeRef) {
-        // Find all chunks for this note and remove them
-        const existingChunks = this.storeRef.query(
-          tables.embeddings.select().where({ parentNoteId: noteId })
-        );
-        if (Array.isArray(existingChunks)) {
-          existingChunks.forEach((chunk: any) => {
-            this.storeRef.commit(events.chunkRemoved({ chunkId: chunk.chunkId }));
-          });
-        }
+        this.storeRef.commit(events.embeddingRemoved({ noteId }));
       } else {
         console.warn('SemanticSearchService: Cannot remove embedding - no store reference');
       }
@@ -572,7 +546,7 @@ class SemanticSearchService {
         if (noteId && this.embeddings.has(noteId)) {
           const embedding = this.embeddings.get(noteId)!;
           results.push({
-            noteId: embedding.parentNoteId,
+            noteId: embedding.noteId,
             title: embedding.title,
             content: embedding.content,
             score: hnswResult.score

@@ -35,30 +35,30 @@ export class EmbeddingCleanupService {
 
       console.log(`Cleanup: Found ${allNotes.length} current notes`);
 
-      // Get all embeddings (now chunk-based)
+      // Get all embeddings
       const allEmbeddingRows = this.storeRef.query(tables.embeddings.select());
       const embeddings = Array.isArray(allEmbeddingRows) ? allEmbeddingRows : [];
 
       console.log(`Cleanup: Found ${embeddings.length} stored embeddings`);
 
-      // Find stale embeddings - chunks whose parent notes no longer exist
+      // Find stale embeddings
       const staleEmbeddings = embeddings.filter((embedding: any) => {
-        const parentNoteId = embedding.parentNoteId;
-        const isValid = typeof parentNoteId === 'string' && parentNoteId.length > 0;
-        const noteExists = isValid && currentNoteIds.has(parentNoteId);
+        const noteId = embedding.noteId;
+        const isValid = typeof noteId === 'string' && noteId.length > 0;
+        const noteExists = isValid && currentNoteIds.has(noteId);
         return !isValid || !noteExists;
       });
 
       console.log(`Cleanup: Found ${staleEmbeddings.length} stale embeddings`);
 
-      // Remove stale embeddings using the new chunk-based event
+      // Remove stale embeddings
       for (const embedding of staleEmbeddings) {
         try {
-          this.storeRef.commit(events.chunkRemoved({ chunkId: embedding.chunkId }));
+          this.storeRef.commit(events.embeddingRemoved({ noteId: embedding.noteId }));
           result.removed++;
-          console.log(`Cleanup: Removed stale embedding chunk ${embedding.chunkId} for note ${embedding.parentNoteId}`);
+          console.log(`Cleanup: Removed stale embedding for note ${embedding.noteId}`);
         } catch (error) {
-          const errorMsg = `Failed to remove embedding chunk ${embedding.chunkId}: ${error}`;
+          const errorMsg = `Failed to remove embedding for note ${embedding.noteId}: ${error}`;
           result.errors.push(errorMsg);
           console.error(errorMsg);
         }
@@ -69,7 +69,7 @@ export class EmbeddingCleanupService {
       const remainingCount = Array.isArray(remainingEmbeddings) ? remainingEmbeddings.length : 0;
       result.remainingStale = Math.max(0, remainingCount - allNotes.length);
 
-      result.summary = `Removed ${result.removed} stale embedding chunks. ${result.remainingStale} stale entries remain. ${result.errors.length} errors occurred.`;
+      result.summary = `Removed ${result.removed} stale embeddings. ${result.remainingStale} stale entries remain. ${result.errors.length} errors occurred.`;
       
       if (result.errors.length > 0) {
         console.warn('Cleanup completed with errors:', result.errors);

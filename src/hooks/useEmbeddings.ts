@@ -36,13 +36,13 @@ export function useEmbeddingCount() {
   return store.useQuery(embeddingCount$) || 0;
 }
 
-// Hook for paginated embeddings - updated for chunk-based schema
+// Hook for paginated embeddings - fix the query builder API
 export function usePaginatedEmbeddings(limit: number = 50, page: number = 0) {
   const { store } = useStore();
   
   const paginatedEmbeddings$ = queryDb(
     () => tables.embeddings
-      .select('chunkId', 'parentNoteId', 'createdAt', 'updatedAt')
+      .select('noteId', 'title', 'createdAt', 'updatedAt')
       .orderBy('updatedAt', 'desc')
       .limit(limit),
     { 

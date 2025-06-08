@@ -1,4 +1,3 @@
-
 import {
   Events,
   makeSchema,
@@ -83,36 +82,18 @@ export const tables = {
     }
   }),
 
-  // MODIFIED: Embeddings table is now chunk-centric
+  // ENHANCED: Embeddings table with better sync tracking
   embeddings: State.SQLite.table({
     name: 'embeddings',
     columns: {
-      // The primary key is now the ID of the individual chunk.
-      chunkId: State.SQLite.text({ primaryKey: true }),
-      // A foreign key links the chunk back to its source note.
-      parentNoteId: State.SQLite.text(),
-      // Chunk-specific metadata for reconstruction and context.
-      startIndex: State.SQLite.integer(),
-      endIndex: State.SQLite.integer(),
-      tokenCount: State.SQLite.integer(),
-      // The embedding vector data itself.
+      noteId: State.SQLite.text({ primaryKey: true }),
+      title: State.SQLite.text(),
+      content: State.SQLite.text(),
       vecDim: State.SQLite.integer({ default: 384 }),
-      vecData: State.SQLite.blob(),
-      embeddingModel: State.SQLite.text({ default: 'Snowflake/snowflake-arctic-embed-s' }),
+      vecData: State.SQLite.blob(), // Binary embedding data
+      embeddingModel: State.SQLite.text({ default: 'Snowflake/snowflake-arctic-embed-s' }), // Track model version
       createdAt: State.SQLite.text(),
-      updatedAt: State.SQLite.text()
-    }
-  }),
-  
-  // NEW: Table to store relationships between chunks, forming a knowledge graph.
-  chunkRelationships: State.SQLite.table({
-    name: 'chunkRelationships',
-    columns: {
-      id: State.SQLite.text({ primaryKey: true }),
-      sourceChunkId: State.SQLite.text(),
-      targetChunkId: State.SQLite.text(),
-      kind: State.SQLite.text(), // e.g., 'similarity', 'reference', 'manual'
-      metadata: State.SQLite.json({ schema: Schema.Any, nullable: true }) // e.g., { score: 0.89 }
+      updatedAt: State.SQLite.text() // Crucial for sync logic
     }
   }),
 
@@ -254,15 +235,13 @@ export const events = {
     })
   }),
 
-  // REPLACED: noteEmbedded is now chunkEmbedded for more granularity.
-  chunkEmbedded: Events.synced({
-    name: 'v1.ChunkEmbedded',
+  // ENHANCED: Enhanced embedding events with model tracking
+  noteEmbedded: Events.synced({
+    name: 'v1.NoteEmbedded',
     schema: Schema.Struct({
-      chunkId: Schema.String,
-      parentNoteId: Schema.String,
-      startIndex: Schema.Number,
-      endIndex: Schema.Number,
-      tokenCount: Schema.Number,
+      noteId: Schema.String,
+      title: Schema.String,
+      content: Schema.String,
       vecData: Schema.Uint8ArrayFromSelf,
       vecDim: Schema.Number,
       embeddingModel: Schema.String,
@@ -271,23 +250,10 @@ export const events = {
     })
   }),
 
-  // REPLACED: embeddingRemoved is now chunkRemoved.
-  chunkRemoved: Events.synced({
-    name: 'v1.ChunkRemoved',
+  embeddingRemoved: Events.synced({
+    name: 'v1.EmbeddingRemoved',
     schema: Schema.Struct({
-      chunkId: Schema.String
-    })
-  }),
-
-  // NEW: Event to create a link between two chunks.
-  chunkRelationshipCreated: Events.synced({
-    name: 'v1.ChunkRelationshipCreated',
-    schema: Schema.Struct({
-      id: Schema.String,
-      sourceChunkId: Schema.String,
-      targetChunkId: Schema.String,
-      kind: Schema.String,
-      metadata: Schema.NullOr(Schema.Any)
+      noteId: Schema.String
     })
   }),
 
@@ -527,7 +493,7 @@ export const events = {
   uiStateSet: tables.uiState.set
 };
 
-// Enhanced materializers with new chunk-based events
+// Enhanced materializers with new events - FIXED to handle log-only events properly
 const materializers = State.SQLite.materializers(events, {
   // Cluster materializers
   'v1.ClusterCreated': ({ id, title, createdAt, updatedAt }) =>
@@ -549,34 +515,14 @@ const materializers = State.SQLite.materializers(events, {
   'v1.NoteDeleted': ({ id }) =>
     tables.notes.delete().where({ id }),
 
-  // REPLACED: The materializer for note embedding is now for chunk embedding.
-  'v1.ChunkEmbedded': ({ chunkId, parentNoteId, startIndex, endIndex, tokenCount, vecData, vecDim, embeddingModel, createdAt, updatedAt }) =>
-    tables.embeddings.insert({
-      chunkId,
-      parentNoteId,
-      startIndex,
-      endIndex,
-      tokenCount,
-      vecData,
-      vecDim,
-      embeddingModel,
-      createdAt,
-      updatedAt
-    }),
+  // ENHANCED: Embedding materializers with model tracking
+  'v1.NoteEmbedded': ({ noteId, title, content, vecData, vecDim, embeddingModel, createdAt, updatedAt }) => [
+    tables.embeddings.delete().where({ noteId }),
+    tables.embeddings.insert({ noteId, title, content, vecData, vecDim, embeddingModel, createdAt, updatedAt })
+  ],
 
-  // REPLACED: The materializer for removing an embedding now operates on a chunkId.
-  'v1.ChunkRemoved': ({ chunkId }) =>
-    tables.embeddings.delete().where({ chunkId }),
-  
-  // NEW: Materializer to persist a new relationship between chunks.
-  'v1.ChunkRelationshipCreated': ({ id, sourceChunkId, targetChunkId, kind, metadata }) =>
-    tables.chunkRelationships.insert({
-      id,
-      sourceChunkId,
-      targetChunkId,
-      kind,
-      metadata
-    }),
+  'v1.EmbeddingRemoved': ({ noteId }) =>
+    tables.embeddings.delete().where({ noteId }),
 
   // Thread materializers
   'v1.ThreadCreated': ({ id, title, createdAt, updatedAt }) =>
