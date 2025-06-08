@@ -27,9 +27,11 @@ class HnswSyncOrchestrator {
     this.performFullSync();
 
     // Subscribe to changes with debounced delta sync
-    this.unsubscribe = store.subscribe(this.allEmbeddingsQuery$, () => {
-      // Use a short timeout to batch rapid changes
-      setTimeout(() => this.performDeltaSync(), 100);
+    this.unsubscribe = store.subscribe(this.allEmbeddingsQuery$, {
+      onUpdate: () => {
+        // Use a short timeout to batch rapid changes
+        setTimeout(() => this.performDeltaSync(), 100);
+      }
     });
     
     // Set up periodic snapshots every 5 minutes
