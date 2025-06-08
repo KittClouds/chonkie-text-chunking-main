@@ -99,6 +99,134 @@ class SemanticSearchService {
     }
   }
 
+  // NEW: Getter for external access to HNSW index
+  getHnswIndex(): HNSW {
+    return this.hnswIndex;
+  }
+
+  // NEW: Incremental addition method for delta orchestrator
+  async addPointToIndex(embeddingRow: any): Promise<void> {
+    if (!this.isReady || !this.hnswIndex) {
+      console.warn('SemanticSearchService: Cannot add point - service not ready');
+      return;
+    }
+
+    try {
+      const existingHnswId = this.noteIdToHnswId.get(embeddingRow.noteId);
+      if (existingHnswId !== undefined) {
+        // This is an update, remove old point first
+        this.removePointFromIndex(embeddingRow.noteId);
+      }
+
+      const embeddingVector = blobToVec(embeddingRow.vecData, embeddingRow.vecDim);
+      const normalizedVector = l2Normalize(embeddingVector);
+      const newHnswId = this.nextHnswId++;
+
+      await this.hnswIndex.addPoint(newHnswId, normalizedVector);
+      
+      this.noteIdToHnswId.set(embeddingRow.noteId, newHnswId);
+      this.hnswIdToNoteId.set(newHnswId, embeddingRow.noteId);
+      this.embeddings.set(embeddingRow.noteId, {
+        noteId: embeddingRow.noteId,
+        title: embeddingRow.title,
+        content: embeddingRow.content,
+        embedding: normalizedVector
+      });
+
+      console.log(`HNSW: Added point for note ${embeddingRow.noteId}`);
+    } catch (error) {
+      console.error(`Failed to add point to HNSW index for note ${embeddingRow.noteId}:`, error);
+    }
+  }
+
+  // NEW: Incremental removal method for delta orchestrator
+  removePointFromIndex(noteId: string): void {
+    if (!this.hnswIndex) {
+      console.warn('SemanticSearchService: Cannot remove point - no HNSW index');
+      return;
+    }
+
+    const hnswId = this.noteIdToHnswId.get(noteId);
+    if (hnswId !== undefined) {
+      // Note: True HNSW removal is complex. We mark as deleted by removing from mappings.
+      // The graph node remains but won't be discoverable in searches.
+      // Full rebuild during next snapshot cycle will properly remove it.
+      this.noteIdToHnswId.delete(noteId);
+      this.hnswIdToNoteId.delete(hnswId);
+      this.embeddings.delete(noteId);
+      console.log(`HNSW: Marked point for removal for note ${noteId}`);
+    }
+  }
+
+  // NEW: Initialize from snapshot (for warm boot)
+  async initializeFromSnapshot(): Promise<boolean> {
+    try {
+      console.log('SemanticSearchService: Attempting to load from snapshot...');
+      const persistedGraph = await hnswPersistence.loadGraph('latest');
+      
+      if (persistedGraph && persistedGraph.nodes.size > 0) {
+        this.hnswIndex = persistedGraph;
+        console.log(`SemanticSearchService: Loaded HNSW graph with ${persistedGraph.nodes.size} nodes`);
+        
+        // Rebuild mappings from LiveStore state
+        await this.rebuildMappingsFromStore();
+        return true;
+      }
+    } catch (error) {
+      console.warn('Failed to load from snapshot:', error);
+    }
+    
+    return false;
+  }
+
+  // NEW: Rebuild mappings after loading snapshot
+  private async rebuildMappingsFromStore(): Promise<void> {
+    if (!this.storeRef) {
+      console.warn('Cannot rebuild mappings - no store reference');
+      return;
+    }
+
+    try {
+      const embeddingRows = this.storeRef.query(tables.embeddings.select());
+      
+      this.embeddings.clear();
+      this.noteIdToHnswId.clear();
+      this.hnswIdToNoteId.clear();
+      this.nextHnswId = 0;
+
+      if (Array.isArray(embeddingRows)) {
+        let maxHnswId = -1;
+        
+        // For now, we'll rebuild the index from scratch since mapping HNSW IDs 
+        // to note IDs from a snapshot is complex. The snapshot serves as backup.
+        embeddingRows.forEach((row: any, index: number) => {
+          try {
+            const embedding = blobToVec(row.vecData, row.vecDim);
+            const hnswId = index; // Simple mapping for now
+            
+            this.noteIdToHnswId.set(row.noteId, hnswId);
+            this.hnswIdToNoteId.set(hnswId, row.noteId);
+            this.embeddings.set(row.noteId, {
+              noteId: row.noteId,
+              title: row.title,
+              content: row.content,
+              embedding
+            });
+            
+            maxHnswId = Math.max(maxHnswId, hnswId);
+          } catch (error) {
+            console.error(`Failed to rebuild mapping for note ${row?.noteId}:`, error);
+          }
+        });
+        
+        this.nextHnswId = maxHnswId + 1;
+        console.log(`SemanticSearchService: Rebuilt mappings for ${this.embeddings.size} embeddings`);
+      }
+    } catch (error) {
+      console.error('Failed to rebuild mappings from store:', error);
+    }
+  }
+
   // Set progress callback for UI updates
   setBuildProgressCallback(callback: (progress: BuildProgress) => void) {
     this.buildProgressCallback = callback;
@@ -179,24 +307,10 @@ class SemanticSearchService {
           }
         });
         
-        // Try to load persisted graph first
-        const persistedGraph = await hnswPersistence.loadGraph();
-        if (persistedGraph && hnswData.length > 0) {
-          this.hnswIndex = persistedGraph;
-          console.log(`SemanticSearchService: Loaded persisted HNSW graph with ${hnswData.length} vectors`);
-        } else {
-          // Build HNSW index with all data at once for better performance
-          if (hnswData.length > 0) {
-            await this.hnswIndex.buildIndex(hnswData);
-            console.log(`SemanticSearchService: Built HNSW index with ${hnswData.length} vectors`);
-            
-            // Persist the graph for future use
-            try {
-              await this.persistHnswIndex();
-            } catch (error) {
-              console.warn('Failed to persist HNSW graph:', error);
-            }
-          }
+        // Build HNSW index with all data at once for better performance
+        if (hnswData.length > 0) {
+          await this.hnswIndex.buildIndex(hnswData);
+          console.log(`SemanticSearchService: Built HNSW index with ${hnswData.length} vectors`);
         }
       }
 
@@ -302,18 +416,6 @@ class SemanticSearchService {
     } catch (error) {
       console.error('Failed to embed note:', error);
       toast.error('Failed to generate embedding for note');
-    }
-  }
-
-  private removeNoteFromIndex(noteId: string) {
-    // Remove from embeddings map
-    this.embeddings.delete(noteId);
-    
-    // Remove from HNSW mappings
-    const hnswId = this.noteIdToHnswId.get(noteId);
-    if (hnswId !== undefined) {
-      this.noteIdToHnswId.delete(noteId);
-      this.hnswIdToNoteId.delete(hnswId);
     }
   }
 

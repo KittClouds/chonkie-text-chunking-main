@@ -1,5 +1,3 @@
-
-
 import { HNSW } from './main';
 
 interface GraphSnapshot {
@@ -76,6 +74,49 @@ export class HNSWPersistence {
     }
   }
 
+  async removeFile(fileName: string): Promise<void> {
+    try {
+      const root = await navigator.storage.getDirectory();
+      const dir = await root.getDirectoryHandle(this.GRAPH_DIR, { create: false });
+      await dir.removeEntry(`${fileName}.json`);
+      console.log(`HNSW: Removed file ${fileName}.json`);
+    } catch (error: any) {
+      if (error.name !== 'NotFoundError') {
+        console.error(`Failed to remove file ${fileName}.json:`, error);
+        throw error;
+      }
+      // If not found, it's a success in our context
+    }
+  }
+
+  async renameFile(oldName: string, newName: string): Promise<void> {
+    try {
+      const root = await navigator.storage.getDirectory();
+      const dir = await root.getDirectoryHandle(this.GRAPH_DIR, { create: false });
+      
+      // Check if source file exists
+      const sourceFile = await dir.getFileHandle(`${oldName}.json`);
+      const fileData = await sourceFile.getFile();
+      
+      // Create new file with the data
+      const targetFile = await dir.getFileHandle(`${newName}.json`, { create: true });
+      const writable = await targetFile.createWritable();
+      await writable.write(await fileData.arrayBuffer());
+      await writable.close();
+      
+      // Remove old file
+      await dir.removeEntry(`${oldName}.json`);
+      
+      console.log(`HNSW: Renamed ${oldName}.json to ${newName}.json`);
+    } catch (error: any) {
+      if (error.name !== 'NotFoundError') {
+        console.error(`Failed to rename ${oldName}.json to ${newName}.json:`, error);
+        throw error;
+      }
+      // Source file doesn't exist, that's okay for our use case
+    }
+  }
+
   async getSnapshotInfo(): Promise<{ count: number; totalSize: number; snapshots: GraphSnapshot[] }> {
     try {
       const root = await navigator.storage.getDirectory();
@@ -124,12 +165,19 @@ export class HNSWPersistence {
   async gcOldSnapshots(keepCount: number = 2): Promise<number> {
     try {
       const { snapshots } = await this.getSnapshotInfo();
-      if (snapshots.length <= keepCount) return 0;
+      
+      // Special handling: if keepCount is 0, only keep 'latest' and 'backup'
+      let toDelete: GraphSnapshot[];
+      if (keepCount === 0) {
+        toDelete = snapshots.filter(s => s.fileName !== 'latest' && s.fileName !== 'backup');
+      } else {
+        if (snapshots.length <= keepCount) return 0;
+        toDelete = snapshots.slice(keepCount);
+      }
       
       const root = await navigator.storage.getDirectory();
       const dir = await root.getDirectoryHandle(this.GRAPH_DIR, { create: false });
       
-      const toDelete = snapshots.slice(keepCount);
       let deletedCount = 0;
       
       for (const snapshot of toDelete) {
@@ -169,4 +217,3 @@ export class HNSWPersistence {
 }
 
 export const hnswPersistence = new HNSWPersistence();
-
