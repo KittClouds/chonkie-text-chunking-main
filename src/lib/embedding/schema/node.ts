@@ -96,10 +96,14 @@ export abstract class BaseNode<T extends Metadata = Metadata> {
 
   get childNodes(): RelatedNodeInfo<T>[] | undefined {
     const relationship = this.relationships[NodeRelationship.CHILD];
-    if (Array.isArray(relationship) || relationship === undefined) {
+    if (relationship === undefined) {
+      return undefined;
+    }
+    if (Array.isArray(relationship)) {
       return relationship;
     }
-    throw new Error('Child object must be an array of RelatedNodeInfo objects');
+    // If it's a single RelatedNodeInfo, wrap it in an array
+    return [relationship];
   }
   
   /**
