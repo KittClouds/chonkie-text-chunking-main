@@ -234,14 +234,14 @@ export const events = {
     })
   }),
 
-  // NEW: Embedding events - fix the schema issue
+  // Enhanced embedding events
   noteEmbedded: Events.synced({
     name: 'v1.NoteEmbedded',
     schema: Schema.Struct({
       noteId: Schema.String,
       title: Schema.String,
       content: Schema.String,
-      vecData: Schema.Uint8ArrayFromSelf, // Use the correct schema for Uint8Array
+      vecData: Schema.Uint8ArrayFromSelf,
       vecDim: Schema.Number,
       createdAt: Schema.String,
       updatedAt: Schema.String
@@ -252,6 +252,34 @@ export const events = {
     name: 'v1.EmbeddingRemoved',
     schema: Schema.Struct({
       noteId: Schema.String
+    })
+  }),
+
+  // NEW: Enhanced embedding management events
+  embeddingIndexCleared: Events.synced({
+    name: 'v1.EmbeddingIndexCleared',
+    schema: Schema.Struct({
+      clearedAt: Schema.String,
+      reason: Schema.String
+    })
+  }),
+
+  embeddingIndexRebuilt: Events.synced({
+    name: 'v1.EmbeddingIndexRebuilt',
+    schema: Schema.Struct({
+      indexId: Schema.String,
+      nodeCount: Schema.Number,
+      rebuiltAt: Schema.String
+    })
+  }),
+
+  hnswGraphSnapshotCreated: Events.synced({
+    name: 'v1.HnswGraphSnapshotCreated',
+    schema: Schema.Struct({
+      fileName: Schema.String,
+      checksum: Schema.String,
+      size: Schema.Number,
+      createdAt: Schema.String
     })
   }),
 
@@ -293,7 +321,7 @@ export const events = {
     })
   }),
 
-  // Entity attributes events
+  // Entity events
   entityAttributesUpdated: Events.synced({
     name: 'v1.EntityAttributesUpdated',
     schema: Schema.Struct({
@@ -460,7 +488,7 @@ export const events = {
   uiStateSet: tables.uiState.set
 };
 
-// Materializers transform events into SQL operations
+// Enhanced materializers with new events
 const materializers = State.SQLite.materializers(events, {
   // Cluster materializers
   'v1.ClusterCreated': ({ id, title, createdAt, updatedAt }) =>
@@ -543,6 +571,13 @@ const materializers = State.SQLite.materializers(events, {
 
   'v1.GraphLayoutSaved': ({ id, name, layoutType, viewport, nodePositions, isDefault, clusterId, createdAt, updatedAt }) =>
     tables.graphLayouts.insert({ id, name, layoutType, viewport, nodePositions, isDefault, clusterId, createdAt, updatedAt }),
+
+  // NEW: Enhanced embedding event handlers
+  'v1.EmbeddingIndexCleared': ({ clearedAt, reason }) => undefined, // Log-only event
+
+  'v1.EmbeddingIndexRebuilt': ({ indexId, nodeCount, rebuiltAt }) => undefined, // Log-only event
+
+  'v1.HnswGraphSnapshotCreated': ({ fileName, checksum, size, createdAt }) => undefined, // Log-only event
 
   // Fixed: Return undefined instead of void for read-only operations
   'v1.GraphLayoutLoaded': ({ id }) => undefined,

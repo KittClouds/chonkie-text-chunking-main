@@ -1,4 +1,3 @@
-
 import { useStore } from '@livestore/react';
 import { 
   activeNoteId$, 
@@ -200,7 +199,7 @@ export function useTopGlobalTriples() {
   return store.useQuery(topGlobalTriples$);
 }
 
-// Helper to commit note updates with embedding integration
+// Enhanced helper to commit note updates with embedding integration
 export function useNoteActions() {
   const { store } = useStore();
   
@@ -210,6 +209,21 @@ export function useNoteActions() {
       updates,
       updatedAt: new Date().toISOString()
     }));
+    
+    // Background embedding update - semantic search service will handle LiveStore events
+    queueMicrotask(async () => {
+      try {
+        const { semanticSearchService } = await import('@/lib/embedding/SemanticSearchService');
+        // Get updated note to regenerate embedding
+        const updatedNote = store.query(tables.notes.select().where({ id }));
+        if (updatedNote && updatedNote.length > 0) {
+          const note = updatedNote[0];
+          await semanticSearchService.addOrUpdateNote(note.id, note.title, note.content);
+        }
+      } catch (error) {
+        console.error('Failed to update note embedding:', error);
+      }
+    });
   };
 
   const createNote = (note: any) => {
@@ -218,7 +232,6 @@ export function useNoteActions() {
     // Background embedding creation - semantic search service will handle LiveStore events
     queueMicrotask(async () => {
       try {
-        // Import here to avoid circular dependency
         const { semanticSearchService } = await import('@/lib/embedding/SemanticSearchService');
         await semanticSearchService.addOrUpdateNote(note.id, note.title, note.content);
       } catch (error) {
@@ -257,12 +270,30 @@ export function useNoteActions() {
     store.commit(events.clusterDeleted({ id }));
   };
 
+  // Enhanced note sync with progress tracking
+  const syncAllNotesEmbeddings = async (progressCallback?: (progress: any) => void) => {
+    try {
+      const { semanticSearchService } = await import('@/lib/embedding/SemanticSearchService');
+      const notes = store.query(tables.notes.select()) || [];
+      
+      if (progressCallback) {
+        semanticSearchService.setBuildProgressCallback(progressCallback);
+      }
+      
+      return await semanticSearchService.syncAllNotes(notes);
+    } catch (error) {
+      console.error('Failed to sync note embeddings:', error);
+      throw error;
+    }
+  };
+
   return { 
     updateNote, 
     createNote, 
     deleteNote,
     createCluster,
     updateCluster,
-    deleteCluster
+    deleteCluster,
+    syncAllNotesEmbeddings
   };
 }

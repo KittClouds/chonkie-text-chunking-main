@@ -1,10 +1,11 @@
-
 import { embeddingService } from './EmbeddingService';
 import { Block } from '@blocknote/core';
 import { vecToBlob, blobToVec } from './binaryUtils';
 import { tables, events } from '../../livestore/schema';
 import { toast } from 'sonner';
 import { HNSW } from './hnsw';
+import { hnswPersistence } from './hnsw/persistence';
+import { embeddingCleanupService } from './CleanupService';
 
 interface NoteEmbedding {
   noteId: string;
@@ -18,6 +19,13 @@ interface SearchResult {
   title: string;
   content: string;
   score: number;
+}
+
+interface BuildProgress {
+  phase: 'cleanup' | 'sync' | 'build' | 'persist' | 'complete';
+  current: number;
+  total: number;
+  message: string;
 }
 
 // Helper to convert BlockNote content to plain text
@@ -58,12 +66,13 @@ class SemanticSearchService {
   private nextHnswId = 0;
   private isReady = false;
   private isInitialized = false;
+  private buildProgressCallback: ((progress: BuildProgress) => void) | null = null;
 
   // Store reference will be injected by the hooks
   private storeRef: any = null;
 
   constructor() {
-    // Initialize HNSW with cosine similarity (same as before)
+    // Initialize HNSW with cosine similarity
     this.hnswIndex = new HNSW(16, 200, null, 'cosine');
   }
 
@@ -81,14 +90,44 @@ class SemanticSearchService {
   // Method to inject store reference from React hooks
   setStore(store: any) {
     this.storeRef = store;
+    embeddingCleanupService.setStore(store);
+    
     if (!this.isInitialized && store) {
       this.loadEmbeddingsFromStore();
       this.isInitialized = true;
     }
   }
 
+  // Set progress callback for UI updates
+  setBuildProgressCallback(callback: (progress: BuildProgress) => void) {
+    this.buildProgressCallback = callback;
+  }
+
+  private reportProgress(phase: BuildProgress['phase'], current: number, total: number, message: string) {
+    if (this.buildProgressCallback) {
+      this.buildProgressCallback({ phase, current, total, message });
+    }
+  }
+
+  // Enhanced cleanup with detailed reporting
+  async forceCleanupStaleEmbeddings() {
+    console.log('SemanticSearchService: Starting force cleanup of stale embeddings');
+    
+    try {
+      const result = await embeddingCleanupService.forceCleanupStaleEmbeddings();
+      
+      // Update in-memory cache after cleanup
+      this.loadEmbeddingsFromStore();
+      
+      return result;
+    } catch (error) {
+      console.error('SemanticSearchService: Force cleanup failed:', error);
+      throw error;
+    }
+  }
+
   // Load all embeddings from LiveStore into memory for fast search
-  private loadEmbeddingsFromStore() {
+  private async loadEmbeddingsFromStore() {
     if (!this.storeRef) {
       console.warn('SemanticSearchService: Cannot load embeddings - no store reference');
       return;
@@ -139,13 +178,24 @@ class SemanticSearchService {
           }
         });
         
-        // Build HNSW index with all data at once for better performance
-        if (hnswData.length > 0) {
-          this.hnswIndex.buildIndex(hnswData).then(() => {
+        // Try to load persisted graph first
+        const persistedGraph = await hnswPersistence.loadGraph();
+        if (persistedGraph && hnswData.length > 0) {
+          this.hnswIndex = persistedGraph;
+          console.log(`SemanticSearchService: Loaded persisted HNSW graph with ${hnswData.length} vectors`);
+        } else {
+          // Build HNSW index with all data at once for better performance
+          if (hnswData.length > 0) {
+            await this.hnswIndex.buildIndex(hnswData);
             console.log(`SemanticSearchService: Built HNSW index with ${hnswData.length} vectors`);
-          }).catch((error) => {
-            console.error('Failed to build HNSW index:', error);
-          });
+            
+            // Persist the graph for future use
+            try {
+              await hnswPersistence.persistGraph(this.hnswIndex);
+            } catch (error) {
+              console.warn('Failed to persist HNSW graph:', error);
+            }
+          }
         }
       }
 
@@ -155,7 +205,7 @@ class SemanticSearchService {
     }
   }
 
-  // This method now triggers LiveStore events instead of direct storage
+  // Enhanced addOrUpdateNote with better error handling
   async addOrUpdateNote(noteId: string, title: string, content: Block[]) {
     try {
       await this.initialize();
@@ -172,7 +222,7 @@ class SemanticSearchService {
 
       const { vector } = await embeddingService.embed([textContent]);
       
-      // Apply additional L2 normalization for vector hygiene (embeddingService already does this, but being explicit)
+      // Apply additional L2 normalization for vector hygiene
       const normalizedVector = l2Normalize(vector);
       
       // Remove old entry if it exists
@@ -223,8 +273,6 @@ class SemanticSearchService {
     if (hnswId !== undefined) {
       this.noteIdToHnswId.delete(noteId);
       this.hnswIdToNoteId.delete(hnswId);
-      // Note: HNSW doesn't support individual node removal easily, 
-      // so we'll rely on the search to filter out non-existent notes
     }
   }
 
@@ -239,6 +287,95 @@ class SemanticSearchService {
       }
     } catch (error) {
       console.error('Failed to remove embedding:', error);
+    }
+  }
+
+  // Enhanced buildIndex with three-phase process
+  async syncAllNotes(notes: Array<{ id: string; title: string; content: Block[] }>) {
+    try {
+      await this.initialize();
+      
+      console.log(`SemanticSearchService: Starting enhanced sync of ${notes.length} notes`);
+      
+      // Phase 1: Enhanced stale embedding cleanup
+      this.reportProgress('cleanup', 0, 4, 'Cleaning up stale embeddings...');
+      const cleanupResult = await this.forceCleanupStaleEmbeddings();
+      console.log(`Cleanup summary - ${cleanupResult.summary}`);
+      
+      if (cleanupResult.remainingStale > 0) {
+        console.warn(`Warning - ${cleanupResult.remainingStale} stale embeddings still remain`);
+      }
+      
+      // Phase 2: Sync current notes
+      this.reportProgress('sync', 1, 4, 'Syncing note embeddings...');
+      
+      // Clear in-memory cache and HNSW index
+      this.embeddings.clear();
+      this.hnswIndex = new HNSW(16, 200, null, 'cosine');
+      this.noteIdToHnswId.clear();
+      this.hnswIdToNoteId.clear();
+      this.nextHnswId = 0;
+      
+      let successCount = 0;
+      let errorCount = 0;
+      
+      // Process each note and generate embeddings
+      for (let i = 0; i < notes.length; i++) {
+        const note = notes[i];
+        try {
+          await this.addOrUpdateNote(note.id, note.title, note.content);
+          successCount++;
+          
+          if (i % 10 === 0) {
+            this.reportProgress('sync', 1, 4, `Processing note ${i + 1}/${notes.length}...`);
+          }
+        } catch (error) {
+          errorCount++;
+          console.error(`Failed to sync note ${note.id}:`, error);
+        }
+      }
+      
+      // Phase 3: Rebuild HNSW index with persistence
+      this.reportProgress('build', 2, 4, 'Building search index...');
+      
+      // Reload from store to ensure consistency
+      await this.loadEmbeddingsFromStore();
+      
+      // Phase 4: Persistence and cleanup
+      this.reportProgress('persist', 3, 4, 'Persisting index and cleanup...');
+      
+      try {
+        // Validate vectors before persistence
+        let vectorValidationPassed = true;
+        for (const [nodeId, node] of (this.hnswIndex as any).nodes || new Map()) {
+          if (!node.vector || node.vector.length === 0) {
+            console.error(`Built index has invalid vector for node ${nodeId}`);
+            vectorValidationPassed = false;
+          }
+        }
+        
+        if (vectorValidationPassed && this.embeddings.size > 0) {
+          await hnswPersistence.persistGraph(this.hnswIndex);
+          console.log('HNSW index persisted successfully');
+        } else {
+          console.warn('Cannot persist index - vector validation failed or no embeddings');
+        }
+        
+        // Garbage collection of old snapshots
+        await hnswPersistence.gcOldSnapshots(2);
+      } catch (error) {
+        console.error('Failed to persist HNSW graph:', error);
+      }
+      
+      this.reportProgress('complete', 4, 4, 'Sync complete');
+      
+      console.log(`SemanticSearchService: Sync complete, ${successCount} embeddings created, ${errorCount} errors`);
+      
+      return this.embeddings.size;
+    } catch (error) {
+      console.error('Failed to sync notes:', error);
+      toast.error('Failed to synchronize embeddings');
+      return 0;
     }
   }
 
@@ -284,51 +421,18 @@ class SemanticSearchService {
     }
   }
 
-  async syncAllNotes(notes: Array<{ id: string; title: string; content: Block[] }>) {
-    try {
-      await this.initialize();
-      
-      console.log(`SemanticSearchService: Syncing ${notes.length} notes`);
-      
-      // Clear in-memory cache and HNSW index
-      this.embeddings.clear();
-      this.hnswIndex = new HNSW(16, 200, null, 'cosine');
-      this.noteIdToHnswId.clear();
-      this.hnswIdToNoteId.clear();
-      this.nextHnswId = 0;
-      
-      let successCount = 0;
-      let errorCount = 0;
-      
-      // Process each note and generate embeddings
-      for (const note of notes) {
-        try {
-          await this.addOrUpdateNote(note.id, note.title, note.content);
-          successCount++;
-        } catch (error) {
-          errorCount++;
-          console.error(`Failed to sync note ${note.id}:`, error);
-        }
-      }
-      
-      console.log(`SemanticSearchService: Sync complete, ${successCount} embeddings created, ${errorCount} errors`);
-      
-      // Reload from store to ensure consistency
-      this.loadEmbeddingsFromStore();
-      
-      return this.embeddings.size;
-    } catch (error) {
-      console.error('Failed to sync notes:', error);
-      toast.error('Failed to synchronize embeddings');
-      return 0;
-    }
+  async getSnapshotInfo() {
+    return await hnswPersistence.getSnapshotInfo();
+  }
+
+  async detectStaleData() {
+    return await embeddingCleanupService.detectStaleData();
   }
 
   getEmbeddingCount(): number {
     return this.embeddings.size;
   }
 
-  // Get stored embedding count from LiveStore (useful for UI display)
   getStoredEmbeddingCount(): number {
     if (!this.storeRef) return 0;
     
