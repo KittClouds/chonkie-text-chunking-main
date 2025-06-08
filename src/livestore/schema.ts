@@ -1,4 +1,3 @@
-
 import {
   Events,
   makeSchema,
@@ -494,7 +493,7 @@ export const events = {
   uiStateSet: tables.uiState.set
 };
 
-// Enhanced materializers with new events
+// Enhanced materializers with new events - FIXED to not return undefined
 const materializers = State.SQLite.materializers(events, {
   // Cluster materializers
   'v1.ClusterCreated': ({ id, title, createdAt, updatedAt }) =>
@@ -578,21 +577,32 @@ const materializers = State.SQLite.materializers(events, {
   'v1.GraphLayoutSaved': ({ id, name, layoutType, viewport, nodePositions, isDefault, clusterId, createdAt, updatedAt }) =>
     tables.graphLayouts.insert({ id, name, layoutType, viewport, nodePositions, isDefault, clusterId, createdAt, updatedAt }),
 
-  // NEW: Enhanced embedding event handlers
-  'v1.EmbeddingIndexCleared': ({ clearedAt, reason }) => undefined, // Log-only event
-
-  'v1.EmbeddingIndexRebuilt': ({ indexId, nodeCount, rebuiltAt }) => undefined, // Log-only event
-
-  'v1.HnswGraphSnapshotCreated': ({ fileName, checksum, size, nodeCount, embeddingModel, createdAt }) => undefined, // Log-only event
-
-  // Fixed: Return undefined instead of void for read-only operations
-  'v1.GraphLayoutLoaded': ({ id }) => undefined,
-
   'v1.GraphLayoutDeleted': ({ id }) =>
     tables.graphLayouts.delete().where({ id }),
 
   'v1.GraphViewportChanged': ({ layoutId, viewport, updatedAt }) =>
-    tables.graphLayouts.update({ viewport, updatedAt }).where({ id: layoutId })
+    tables.graphLayouts.update({ viewport, updatedAt }).where({ id: layoutId }),
+
+  // FIXED: Enhanced embedding event handlers - properly return void instead of undefined
+  'v1.EmbeddingIndexCleared': ({ clearedAt, reason }) => {
+    // Log-only event - no database operations needed
+    console.log(`Embedding index cleared at ${clearedAt}: ${reason}`);
+  },
+
+  'v1.EmbeddingIndexRebuilt': ({ indexId, nodeCount, rebuiltAt }) => {
+    // Log-only event - no database operations needed
+    console.log(`Embedding index rebuilt: ${indexId} with ${nodeCount} nodes at ${rebuiltAt}`);
+  },
+
+  'v1.HnswGraphSnapshotCreated': ({ fileName, checksum, size, nodeCount, embeddingModel, createdAt }) => {
+    // Log-only event - no database operations needed
+    console.log(`HNSW graph snapshot created: ${fileName} (${size} bytes, ${nodeCount} nodes) at ${createdAt}`);
+  },
+
+  'v1.GraphLayoutLoaded': ({ id, loadedAt }) => {
+    // Log-only event - no database operations needed
+    console.log(`Graph layout loaded: ${id} at ${loadedAt}`);
+  }
 });
 
 // Create the state with tables and materializers
