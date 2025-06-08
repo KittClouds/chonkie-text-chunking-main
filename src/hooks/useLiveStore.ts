@@ -32,7 +32,8 @@ import {
   topCoOccurrences$,
   topGlobalTriples$
 } from '../livestore/queries/derived';
-import { events } from '../livestore/schema';
+import { events, tables } from '../livestore/schema';
+import { Block } from '@blocknote/core';
 
 // Custom hooks that wrap LiveStore usage with proper typing
 export function useActiveNoteId() {
@@ -215,9 +216,10 @@ export function useNoteActions() {
       try {
         const { semanticSearchService } = await import('@/lib/embedding/SemanticSearchService');
         // Get updated note to regenerate embedding
-        const updatedNote = store.query(tables.notes.select().where({ id }));
-        if (updatedNote && updatedNote.length > 0) {
-          const note = updatedNote[0];
+        const updatedNoteResult = store.query(tables.notes.select().where({ id }));
+        const updatedNotes = Array.isArray(updatedNoteResult) ? updatedNoteResult : [];
+        if (updatedNotes.length > 0) {
+          const note = updatedNotes[0];
           await semanticSearchService.addOrUpdateNote(note.id, note.title, note.content);
         }
       } catch (error) {
@@ -274,7 +276,8 @@ export function useNoteActions() {
   const syncAllNotesEmbeddings = async (progressCallback?: (progress: any) => void) => {
     try {
       const { semanticSearchService } = await import('@/lib/embedding/SemanticSearchService');
-      const notes = store.query(tables.notes.select()) || [];
+      const notesResult = store.query(tables.notes.select());
+      const notes: Array<{ id: string; title: string; content: Block[]; }> = Array.isArray(notesResult) ? notesResult : [];
       
       if (progressCallback) {
         semanticSearchService.setBuildProgressCallback(progressCallback);

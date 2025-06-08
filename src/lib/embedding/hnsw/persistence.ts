@@ -83,18 +83,25 @@ export class HNSWPersistence {
       const snapshots: GraphSnapshot[] = [];
       let totalSize = 0;
       
-      for await (const [name, handle] of dir.entries()) {
-        if (handle.kind === 'file' && name.endsWith('.json')) {
-          const file = await handle.getFile();
-          const size = file.size;
-          totalSize += size;
-          
-          snapshots.push({
-            fileName: name.replace('.json', ''),
-            checksum: '',
-            createdAt: new Date(file.lastModified),
-            size
-          });
+      // Use keys() and values() instead of entries() for better compatibility
+      const keys = dir.keys();
+      for await (const name of keys) {
+        if (name.endsWith('.json')) {
+          try {
+            const handle = await dir.getFileHandle(name);
+            const file = await handle.getFile();
+            const size = file.size;
+            totalSize += size;
+            
+            snapshots.push({
+              fileName: name.replace('.json', ''),
+              checksum: '',
+              createdAt: new Date(file.lastModified),
+              size
+            });
+          } catch (error) {
+            console.warn(`Failed to get info for file: ${name}`, error);
+          }
         }
       }
       
