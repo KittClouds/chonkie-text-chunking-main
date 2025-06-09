@@ -1,5 +1,5 @@
 
-import { nanoid } from 'nanoid';
+import { nanoid, customAlphabet } from 'nanoid';
 
 export type NoteId = string;
 export type ClusterId = string;
@@ -36,3 +36,10 @@ export type ChunkId = string;
  * e.g., chunk_aB_1xYz
  */
 export const generateChunkId = (): ChunkId => `chunk_${nanoid()}`;
+
+// Stable ID helpers for chunk-centric architecture
+const ALPHA = '0123456789abcdefghijklmnopqrstuvwxyz';
+const rnd10 = customAlphabet(ALPHA, 10);
+
+export const nodeId = () => `node_${rnd10()}`;
+export const chunkId = (node: string, i: number) => `${node}:${i}`;

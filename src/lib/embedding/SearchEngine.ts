@@ -1,4 +1,3 @@
-
 import { embeddingService } from './EmbeddingService';
 import { HNSW } from './hnsw';
 import { blobToVec } from './binaryUtils';
@@ -23,6 +22,22 @@ function l2Normalize(v: Float32Array): Float32Array {
   for (const x of v) norm += x * x;
   norm = 1 / Math.sqrt(norm || 1e-9);
   return v.map(x => x * norm) as Float32Array;
+}
+
+// Helper to parse chunk IDs and extract parent information
+function parseNodeId(id: string): { isChunk: boolean; parentId: string; chunkIndex?: number } {
+  if (id.includes(':')) {
+    const [parentId, chunkIndexStr] = id.split(':');
+    return {
+      isChunk: true,
+      parentId,
+      chunkIndex: parseInt(chunkIndexStr, 10)
+    };
+  }
+  return {
+    isChunk: false,
+    parentId: id
+  };
 }
 
 export class SearchEngine {
@@ -86,6 +101,37 @@ export class SearchEngine {
       console.log(`SearchEngine: Added point for note ${embeddingRow.noteId}`);
     } catch (error) {
       console.error(`Failed to add point to search index for note ${embeddingRow.noteId}:`, error);
+    }
+  }
+
+  // New method to add chunk-specific points
+  async addChunkPoint(chunkId: string, vector: Float32Array, metadata?: { parentId: string; chunkIndex: number }): Promise<void> {
+    if (!this.isReady || !this.hnswIndex) {
+      console.warn('SearchEngine: Cannot add chunk point - service not ready');
+      return;
+    }
+
+    try {
+      const normalizedVector = l2Normalize(vector);
+      const newHnswId = this.nextHnswId++;
+
+      await this.hnswIndex.addPoint(newHnswId, normalizedVector);
+      
+      this.noteIdToHnswId.set(chunkId, newHnswId);
+      this.hnswIdToNoteId.set(newHnswId, chunkId);
+      
+      if (metadata) {
+        this.embeddings.set(chunkId, {
+          noteId: chunkId,
+          title: `Chunk ${metadata.chunkIndex} of ${metadata.parentId}`,
+          content: '', // Chunks don't store full content in embeddings map
+          embedding: normalizedVector
+        });
+      }
+
+      console.log(`SearchEngine: Added chunk point ${chunkId}`);
+    } catch (error) {
+      console.error(`Failed to add chunk point ${chunkId}:`, error);
     }
   }
 
@@ -231,13 +277,15 @@ export class SearchEngine {
       
       const results: SearchResult[] = [];
       
-      // Convert HNSW results back to our format
+      // Convert HNSW results back to our format with chunk awareness
       for (const hnswResult of hnswResults) {
         const noteId = this.hnswIdToNoteId.get(hnswResult.id);
         if (noteId && this.embeddings.has(noteId)) {
           const embedding = this.embeddings.get(noteId)!;
+          const { isChunk, parentId } = parseNodeId(noteId);
+          
           results.push({
-            noteId: embedding.noteId,
+            noteId: isChunk ? parentId : embedding.noteId,
             title: embedding.title,
             content: embedding.content,
             score: hnswResult.score
