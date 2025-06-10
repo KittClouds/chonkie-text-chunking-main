@@ -10,9 +10,13 @@ let its: any;
 async function initializeWink() {
   if (!nlp) {
     try {
-      winkNLP = await import('wink-nlp');
-      model = await import('wink-eng-lite-web-model');
-      nlp = winkNLP.default(model.default);
+      // Use dynamic import with string concatenation to avoid TS resolution
+      const winkModule = await import('wink' + '-nlp');
+      const modelModule = await import('wink-eng-lite' + '-web-model');
+      
+      winkNLP = winkModule.default || winkModule;
+      model = modelModule.default || modelModule;
+      nlp = winkNLP(model);
       its = nlp.its;
     } catch (error) {
       console.warn('Failed to load wink-nlp, falling back to simple tokenization:', error);
