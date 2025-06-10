@@ -1,4 +1,3 @@
-
 import { embeddingService } from './EmbeddingService';
 import { HNSW } from './hnsw';
 import { blobToVec } from './binaryUtils';
@@ -49,9 +48,21 @@ export class SearchEngine {
   private nextHnswId = 0;
   private isReady = false;
 
-  constructor() {
-    // Initialize HNSW with cosine similarity - fix constructor parameter order
-    this.hnswIndex = new HNSW(16, 200, 'cosine');
+  // New fields for enhanced functionality
+  private tombstones = new Set<number>();
+  private queryCache = new Map<string, Float32Array>();
+  private resultsCache = new Map<string, SearchResult[]>();
+  private bm25Provider?: (query: string) => Map<string, number>;
+  private config = {
+    efSearch: 50,
+    efConstruction: 200,
+    alpha: 1.0, // 1.0 = pure vector, 0.0 = pure BM25
+    cacheSize: 128
+  };
+
+  constructor(config: Partial<SearchEngine['config']> = {}) {
+    this.config = { ...this.config, ...config };
+    this.hnswIndex = new HNSW(16, this.config.efConstruction, 'cosine');
   }
 
   async initialize() {
@@ -136,22 +147,14 @@ export class SearchEngine {
     }
   }
 
-  // Remove a point from the search index
+  // Remove a point from the search index using tombstones
   removePoint(noteId: string): void {
-    if (!this.hnswIndex) {
-      console.warn('SearchEngine: Cannot remove point - no HNSW index');
-      return;
-    }
-
     const hnswId = this.noteIdToHnswId.get(noteId);
     if (hnswId !== undefined) {
-      // Note: True HNSW removal is complex. We mark as deleted by removing from mappings.
-      // The graph node remains but won't be discoverable in searches.
-      // Full rebuild during next snapshot cycle will properly remove it.
-      this.noteIdToHnswId.delete(noteId);
-      this.hnswIdToNoteId.delete(hnswId);
-      this.embeddings.delete(noteId);
-      console.log(`SearchEngine: Marked point for removal for note ${noteId}`);
+      this.tombstones.add(hnswId);
+      // Note: We no longer delete from the main maps, as tombstones handle it.
+      // The entries will be fully purged on the next snapshot rebuild.
+      console.log(`SearchEngine: Added tombstone for HNSW ID ${hnswId} (Note: ${noteId})`);
     }
   }
 
@@ -166,10 +169,13 @@ export class SearchEngine {
   // Clear all data from the search engine
   clear(): void {
     this.embeddings.clear();
-    this.hnswIndex = new HNSW(16, 200, 'cosine');
+    this.hnswIndex = new HNSW(16, this.config.efConstruction, 'cosine');
     this.noteIdToHnswId.clear();
     this.hnswIdToNoteId.clear();
     this.nextHnswId = 0;
+    this.tombstones.clear();
+    this.queryCache.clear();
+    this.resultsCache.clear();
   }
 
   // Load embeddings from database rows into the search index
@@ -259,44 +265,108 @@ export class SearchEngine {
     }
   }
 
-  // Perform semantic search
+  // New private method for adaptive search
+  private adaptiveSearch(queryVector: Float32Array, limit: number) {
+    let efSearch = this.config.efSearch;
+    let results = this.hnswIndex.searchKNN(queryVector, efSearch, (id) => !this.tombstones.has(id));
+
+    // If recall looks low (top score is weak or not enough results), double ef and retry once.
+    if (results.length > 0 && (results[0].score < 0.65 || results.length < limit)) {
+      efSearch *= 2;
+      results = this.hnswIndex.searchKNN(queryVector, efSearch, (id) => !this.tombstones.has(id));
+    }
+    return results;
+  }
+
+  // New private method for precise cosine calculation
+  private exactCosine(v1: Float32Array, v2: Float32Array): number {
+    let dotProduct = 0;
+    for (let i = 0; i < v1.length; i++) {
+      dotProduct += v1[i] * v2[i];
+    }
+    return dotProduct; // Assumes vectors are pre-normalized
+  }
+
+  // New public method to set BM25 provider
+  public setBm25Provider(provider: (query: string) => Map<string, number>): void {
+    this.bm25Provider = provider;
+  }
+
+  // Enhanced search method with all new features
   async search(query: string, limit = 10): Promise<SearchResult[]> {
     try {
       await this.initialize();
-      
-      if (!query.trim() || this.embeddings.size === 0) {
-        return [];
+      const trimmedQuery = query.trim();
+      if (!trimmedQuery || this.embeddings.size === 0) return [];
+
+      // 1. Check results cache (for identical queries)
+      if (this.resultsCache.has(trimmedQuery)) {
+        return this.resultsCache.get(trimmedQuery)!.slice(0, limit);
       }
 
-      const { vector: queryVector } = await embeddingService.embed([`search_query: ${query}`]);
-      
-      // Apply L2 normalization to query vector for vector hygiene
-      const normalizedQueryVector = l2Normalize(queryVector);
-      
-      // Use HNSW for fast approximate nearest neighbor search
-      const hnswResults = this.hnswIndex.searchKNN(normalizedQueryVector, Math.min(limit * 2, 50));
-      
-      const results: SearchResult[] = [];
-      
-      // Convert HNSW results back to our format with chunk awareness
-      for (const hnswResult of hnswResults) {
-        const noteId = this.hnswIdToNoteId.get(hnswResult.id);
-        if (noteId && this.embeddings.has(noteId)) {
-          const embedding = this.embeddings.get(noteId)!;
-          const { isChunk, parentId } = parseNodeId(noteId);
-          
-          results.push({
-            noteId: isChunk ? parentId : embedding.noteId,
-            title: embedding.title,
-            content: embedding.content,
-            score: hnswResult.score
-          });
+      // 2. Get query vector (from cache or by embedding)
+      let queryVector = this.queryCache.get(trimmedQuery);
+      if (!queryVector) {
+        const { vector } = await embeddingService.embed([`search_query: ${trimmedQuery}`]);
+        queryVector = l2Normalize(vector);
+        this.queryCache.set(trimmedQuery, queryVector);
+        if (this.queryCache.size > this.config.cacheSize) {
+          this.queryCache.delete(this.queryCache.keys().next().value); // Evict oldest
         }
       }
 
-      return results
-        .sort((a, b) => b.score - a.score)
-        .slice(0, limit);
+      // 3. Adaptive HNSW search (with tombstone filter)
+      const kForRerank = limit * 5;
+      const hnswResults = this.adaptiveSearch(queryVector, kForRerank);
+
+      // 4. Two-Stage Exact Reranking
+      const candidates = hnswResults.slice(0, kForRerank).map(hnswResult => {
+        const noteId = this.hnswIdToNoteId.get(hnswResult.id);
+        if (!noteId) return null;
+        const embedding = this.embeddings.get(noteId);
+        if (!embedding) return null;
+        
+        const vectorScore = this.exactCosine(queryVector!, embedding.embedding);
+        return { noteId, embedding, vectorScore };
+      }).filter(c => c !== null) as { noteId: string; embedding: NoteEmbedding; vectorScore: number }[];
+
+      // 5. Score Fusion (with BM25 stub)
+      const bm25Scores = this.bm25Provider ? this.bm25Provider(trimmedQuery) : new Map<string, number>();
+      
+      const finalResults = candidates.map(candidate => {
+        const { isChunk, parentId } = parseNodeId(candidate.noteId);
+        const noteId = isChunk ? parentId : candidate.noteId;
+        
+        const bm25Score = bm25Scores.get(noteId) || 0;
+        const finalScore = this.config.alpha * candidate.vectorScore + (1 - this.config.alpha) * bm25Score;
+        
+        return {
+          noteId: noteId,
+          title: candidate.embedding.title,
+          content: candidate.embedding.content,
+          score: finalScore
+        };
+      });
+
+      // Deduplicate results based on parent note ID, keeping the best score
+      const uniqueResults = Array.from(
+        finalResults.reduce((map, item) => {
+          if (!map.has(item.noteId) || item.score > map.get(item.noteId)!.score) {
+            map.set(item.noteId, item);
+          }
+          return map;
+        }, new Map<string, SearchResult>()).values()
+      );
+
+      const sortedResults = uniqueResults.sort((a, b) => b.score - a.score).slice(0, limit);
+      
+      // 6. Update results cache
+      this.resultsCache.set(trimmedQuery, sortedResults);
+      if (this.resultsCache.size > this.config.cacheSize) {
+        this.resultsCache.delete(this.resultsCache.keys().next().value); // Evict oldest
+      }
+      
+      return sortedResults;
     } catch (error) {
       console.error('Search failed:', error);
       throw error;
