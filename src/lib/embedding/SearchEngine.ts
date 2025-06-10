@@ -1,3 +1,4 @@
+
 import { embeddingService } from './EmbeddingService';
 import { HNSW } from './hnsw';
 import { blobToVec } from './binaryUtils';
@@ -49,8 +50,8 @@ export class SearchEngine {
   private isReady = false;
 
   constructor() {
-    // Initialize HNSW with cosine similarity
-    this.hnswIndex = new HNSW(16, 200, null, 'cosine');
+    // Initialize HNSW with cosine similarity - fix constructor parameter order
+    this.hnswIndex = new HNSW(16, 200, 'cosine');
   }
 
   async initialize() {
@@ -165,7 +166,7 @@ export class SearchEngine {
   // Clear all data from the search engine
   clear(): void {
     this.embeddings.clear();
-    this.hnswIndex = new HNSW(16, 200, null, 'cosine');
+    this.hnswIndex = new HNSW(16, 200, 'cosine');
     this.noteIdToHnswId.clear();
     this.hnswIdToNoteId.clear();
     this.nextHnswId = 0;

@@ -1,4 +1,5 @@
-import { HNSW } from './main';
+
+import { HNSW, SerializedHNSWData } from './main';
 
 interface GraphSnapshot {
   fileName: string;
@@ -7,12 +8,8 @@ interface GraphSnapshot {
   size: number;
 }
 
-interface SerializedGraph {
-  M: number;
-  efConstruction: number;
-  levelMax: number;
-  entryPointId: number;
-  nodes: any[];
+// Update SerializedGraph to extend SerializedHNSWData to ensure compatibility
+interface SerializedGraph extends SerializedHNSWData {
   metadata: {
     version: string;
     createdAt: string;
@@ -64,7 +61,18 @@ export class HNSWPersistence {
         console.warn(`Version mismatch: expected ${this.VERSION}, got ${serialized.metadata?.version}`);
       }
       
-      const hnsw = HNSW.fromJSON(serialized);
+      // Convert SerializedGraph to SerializedHNSWData by extracting the required properties
+      const hnswData: SerializedHNSWData = {
+        M: serialized.M,
+        efConstruction: serialized.efConstruction,
+        levelMax: serialized.levelMax,
+        entryPointId: serialized.entryPointId,
+        nodes: serialized.nodes,
+        metric: serialized.metric,
+        d: serialized.d
+      };
+      
+      const hnsw = HNSW.fromJSON(hnswData);
       console.log(`HNSW graph loaded: ${fileName}, nodes: ${serialized.metadata?.nodeCount}`);
       
       return hnsw;
