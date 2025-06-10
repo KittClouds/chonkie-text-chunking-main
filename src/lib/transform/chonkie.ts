@@ -1,5 +1,5 @@
 
-import { TokenChunker, RecursiveChunker, RecursiveRules } from 'chonkie';
+import { TokenChunker, RecursiveChunker } from 'chonkie';
 
 interface ChunkResult {
   text: string;
@@ -25,19 +25,12 @@ class ChunkingService {
         returnType: 'chunks'
       });
 
-      // Initialize recursive chunker with hierarchical rules
-      const rules = new RecursiveRules([
-        { delimiters: ["\n\n"], includeDelim: "prev" }, // Paragraphs
-        { delimiters: [". ", "! ", "? "], includeDelim: "prev" }, // Sentences
-        { whitespace: true } // Words as fallback
-      ]);
-
+      // Initialize recursive chunker with default hierarchical rules
+      // According to docs, RecursiveChunker uses default rules when none specified
       this.recursiveChunker = await RecursiveChunker.create({
         tokenizer: "Xenova/gpt2",
         chunkSize: 256,
-        rules,
-        minCharactersPerChunk: 24,
-        returnType: 'chunks'
+        minCharactersPerChunk: 24
       });
 
       this.isInitialized = true;
