@@ -268,12 +268,16 @@ export class SearchEngine {
   // New private method for adaptive search
   private adaptiveSearch(queryVector: Float32Array, limit: number) {
     let efSearch = this.config.efSearch;
-    let results = this.hnswIndex.searchKNN(queryVector, efSearch, (id) => !this.tombstones.has(id));
+    let results = this.hnswIndex.searchKNN(queryVector, limit, efSearch);
+
+    // Filter out tombstoned results
+    results = results.filter(result => !this.tombstones.has(result.id));
 
     // If recall looks low (top score is weak or not enough results), double ef and retry once.
     if (results.length > 0 && (results[0].score < 0.65 || results.length < limit)) {
       efSearch *= 2;
-      results = this.hnswIndex.searchKNN(queryVector, efSearch, (id) => !this.tombstones.has(id));
+      const retryResults = this.hnswIndex.searchKNN(queryVector, limit * 2, efSearch);
+      results = retryResults.filter(result => !this.tombstones.has(result.id));
     }
     return results;
   }
