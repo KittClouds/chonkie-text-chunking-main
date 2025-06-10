@@ -1,4 +1,3 @@
-
 // Note: Similarity functions
 function dotProduct(a: Float32Array | number[], b: Float32Array | number[]): number {
   let dP = 0.0;
